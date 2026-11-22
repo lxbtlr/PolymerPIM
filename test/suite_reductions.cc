@@ -22,6 +22,56 @@ TEST(reductions, sum_matches_host) {
   CHECK_EQ(actual, expected);
 }
 
+// A fused kernel whose element-wise math fits int32 but whose total does not:
+// only the accumulator needs to be int64.
+TEST(reductions, fused_sum_promotes_accumulator_only) {
+#if !ENABLE_PROMOTION_REDUCTIONS || !PROMOTION_ACCUMULATOR_ONLY
+  SKIP("requires ENABLE_PROMOTION_REDUCTIONS=1 PROMOTION_ACCUMULATOR_ONLY=1");
+#else
+  const size_t n = tf::elements();
+  std::vector<T> a = tf::random_vector<T>(n, 100000000, 700000000);
+  dpu_vector<T> da = dpu_vector<T>::from_cpu(a);
+
+  int64_t actual = sum(da * 3).get();
+
+  int64_t expected = 0;
+  for (T x : a) expected += 3 * (int64_t)x;
+  CHECK_EQ(actual, expected);
+#endif
+}
+
+// A promoted sum and an unpromoted min fused into one kernel keep separate
+// accumulator widths.
+TEST(reductions, fused_sum_and_min_promote_accumulator_only) {
+#if !ENABLE_PROMOTION_REDUCTIONS || !PROMOTION_ACCUMULATOR_ONLY
+  SKIP("requires ENABLE_PROMOTION_REDUCTIONS=1 PROMOTION_ACCUMULATOR_ONLY=1");
+#else
+  const size_t n = tf::elements();
+  std::vector<T> a = tf::random_vector<T>(n, -700000000, 700000000);
+  dpu_vector<T> da = dpu_vector<T>::from_cpu(a);
+  dpu_vector<T> db = dpu_vector<T>::from_cpu(a);
+  tf::drain();
+
+  std::vector<dpu_future<T>> futures;
+  futures.push_back(sum(da * -3));
+  futures.push_back(min(db * -3));
+  std::vector<int64_t> results;
+  for (auto value : tf::get_all(futures)) results.push_back((int64_t)value);
+
+  int64_t want_sum = 0;
+  int64_t want_min = INT64_MAX;
+  for (T x : a) {
+    want_sum += -3 * (int64_t)x;
+    if (-3 * (int64_t)x < want_min) want_min = -3 * (int64_t)x;
+  }
+  CHECK_EQ(results.size(), (size_t)2);
+  if (results.size() == 2) {
+    CHECK_EQ(results[0], want_sum);
+    CHECK_EQ(results[1], want_min);
+  }
+#endif
+}
+
 TEST(reductions, min_matches_host) {
   const size_t n = tf::elements();
   std::vector<T> a = tf::random_vector<T>(n, -1000, 1000);

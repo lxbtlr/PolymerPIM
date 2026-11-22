@@ -500,13 +500,30 @@ __dma_aligned uint8_t dpu_workspace[NR_TASKLETS][TASKLET_WORKSPACE_SIZE];
 
 static std::string select_stack_type(const KernelPlan& plan,
                                      const std::string& type_name) {
-#if ENABLE_PROMOTION_REDUCTIONS == 1
+#if ENABLE_PROMOTION_REDUCTIONS == 1 && PROMOTION_ACCUMULATOR_ONLY != 1
   if (plan.any_promotable_reduction() && type_name == "int32_t")
     return "int64_t";
 #else
   (void)plan;
 #endif
   return type_name;
+}
+
+// The type a reduction chain accumulates in.  Normally the stack type; with
+// PROMOTION_ACCUMULATOR_ONLY the stack stays 32-bit and only promoted sums and
+// products widen, at the fold.
+static std::string select_accumulator_type(uint8_t reduce_op,
+                                           const std::string& type_name,
+                                           const std::string& stack_type) {
+#if ENABLE_PROMOTION_REDUCTIONS == 1 && PROMOTION_ACCUMULATOR_ONLY == 1
+  if ((reduce_op == OP_SUM || reduce_op == OP_PRODUCT) &&
+      type_name == "int32_t")
+    return "int64_t";
+#else
+  (void)reduce_op;
+  (void)type_name;
+#endif
+  return stack_type;
 }
 
 // The identity value a reduction accumulator starts from.
@@ -642,9 +659,11 @@ static void write_kernel_declarations(std::ostream& out, const KernelPlan& plan,
       out << "    arg_result_t acc_" << c_idx << " = {" << identity
           << ", UINT32_MAX};\n";
     } else {
-      out << "    " << stack_type << " acc_" << c_idx << " = "
-          << reduction_identity(chains[c_idx].reduction_op, stack_type)
-          << ";\n";
+      const uint8_t op = chains[c_idx].reduction_op;
+      const std::string acc_type =
+          select_accumulator_type(op, type_name, stack_type);
+      out << "    " << acc_type << " acc_" << c_idx << " = "
+          << reduction_identity(op, acc_type) << ";\n";
     }
   }
 
@@ -792,10 +811,12 @@ static void write_kernel_epilogue(std::ostream& out, const KernelPlan& plan,
   for (size_t c_idx = 0; c_idx < chains.size(); ++c_idx) {
     if (!chains[c_idx].is_reduction) continue;
     has_reduction_chain = true;
-    const bool is_arg = chains[c_idx].reduction_op == OP_ARGMIN_REDUCE ||
-                        chains[c_idx].reduction_op == OP_ARGMAX_REDUCE;
+    const uint8_t op = chains[c_idx].reduction_op;
+    const bool is_arg = op == OP_ARGMIN_REDUCE || op == OP_ARGMAX_REDUCE;
     out << fill(kParkAccumulatorTemplate,
-                {{"T", is_arg ? "arg_result_t" : stack_type},
+                {{"T", is_arg ? "arg_result_t"
+                              : select_accumulator_type(op, type_name,
+                                                        stack_type)},
                  {"c", std::to_string(c_idx)}});
   }
 
@@ -824,7 +845,7 @@ static void write_kernel_epilogue(std::ostream& out, const KernelPlan& plan,
                     {{"c", c}, {"cmp", cmp}});
       } else {
         out << fill(kMergeAccumulatorTemplate,
-                    {{"T", stack_type},
+                    {{"T", select_accumulator_type(op, type_name, stack_type)},
                      {"c", c},
                      {"fold", fold_statement(op, "tot_" + c, "v_" + c)}});
       }

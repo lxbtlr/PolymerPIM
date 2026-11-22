@@ -48,6 +48,12 @@ DEBUG_KEEP_JIT_DIR ?= 0
 # if you are overflowing during summation/mul reductions
 ENABLE_PROMOTION_REDUCTIONS ?= 0
 
+# with ENABLE_PROMOTION_REDUCTIONS, promote only the reduction accumulators in
+# fused (JIT) kernels and keep their element-wise math in 32 bits, as the
+# reduction kernel and the pipeline interpreter do. Much faster, since the DPU
+# has no 64-bit multiply, but the element-wise math must not overflow int32.
+PROMOTION_ACCUMULATOR_ONLY ?= 0
+
 # the default compiler on feta supports up to C++17
 # c++20 is needed for some debugging output from std::source_location
 CXX_STANDARD ?= c++17
@@ -148,6 +154,7 @@ TRACE=$(TRACE)
 PERFETTO_HOME=$(PERFETTO_HOME)
 DEBUG_KEEP_JIT_DIR=$(DEBUG_KEEP_JIT_DIR)
 ENABLE_PROMOTION_REDUCTIONS=$(ENABLE_PROMOTION_REDUCTIONS)
+PROMOTION_ACCUMULATOR_ONLY=$(PROMOTION_ACCUMULATOR_ONLY)
 QUEUE_ABSORB_LIMIT=$(QUEUE_ABSORB_LIMIT)
 ENABLE_OOM_RECOVERY=1
 MAX_HFUSE_CHAINS=$(MAX_HFUSE_CHAINS)
